@@ -1,63 +1,50 @@
-import cors from 'cors'
-import express from 'express'
-import { createServer } from 'http'
-import mongoose from 'mongoose'
-import { Server } from 'socket.io'
-import { ALLOWED_ORIGIN, MONGODB_URI } from './config.js'
-import onConnection from './socket_io/onConnection.js'
-import { getFilePath } from './utils/file.js'
-import onError from './utils/onError.js'
-import upload from './utils/upload.js'
+const express = require("express");
+const app = express(); 
+const cors  = require("cors");
+const mongoose = require("mongoose");
+const dotenv = require("dotenv");
+const userRoutes = require("./routes/userRoutes");
+const messageRoute = require("./routes/messagesRoute");
+const socket = require("socket.io");
 
-const app = express()
+dotenv.config();
+app.use(cors());
+app.use(express.json());
 
-app.use(
-  cors({
-    origin: ALLOWED_ORIGIN
-  })
-)
-app.use(express.json())
+app.use("/api/auth", userRoutes);
+app.use("/api/message", messageRoute);
 
-app.use('/upload', upload.single('file'), (req, res) => {
-  if (!req.file) return res.sendStatus(400)
-
-  const relativeFilePath = req.file.path
-    .replace(/\\/g, '/')
-    .split('server/files')[1]
-
-  res.status(201).json(relativeFilePath)
-})
-
-app.use('/files', (req, res) => {
-  const filePath = getFilePath(req.url)
-
-  res.status(200).sendFile(filePath)
-})
-
-app.use(onError)
-
-try {
-    mongoose.connect(MONGODB_URI, {
+//mongoose connection
+mongoose.connect(process.env.MONGO_URL, {
     useNewUrlParser: true,
     useUnifiedTopology: true
-  })
-  console.log('🚀 Connected')
-} catch (e) {
-  onError(e)
-}
+    }).then(() => {
+        console.log("DB Connection Successful!")
+    }).catch((err) => console.log(err));
 
-const server = createServer(app)
+ const server = app.listen(process.env.PORT, ()=>{
+    console.log(`Server started on Port ${process.env.PORT}`);
+});
 
-const io = new Server(server, {
-  cors: ALLOWED_ORIGIN,
-  serveClient: false
-})
+const io = socket(server,{
+    cors: {
+        origin: "http://localhost:3000",
+        credentials: true,
+    },
+});
+//store all online users inside this map
+global.onlineUsers =  new Map();
+ 
+io.on("connection",(socket)=>{
+    global.chatSocket = socket;
+    socket.on("add-user",(userId)=>{
+        onlineUsers.set(userId,socket.id);
+    });
 
-io.on('connection', (socket) => {
-  onConnection(io, socket)
-})
-
-const PORT = process.env.PORT || 4000
-server.listen(PORT, () => {
-  console.log(`🚀 Server started on port ${PORT}`)
-})
+    socket.on("send-msg",(data)=>{
+        const sendUserSocket = onlineUsers.get(data.to);
+        if(sendUserSocket) {
+            socket.to(sendUserSocket).emit("msg-recieved",data.message);
+        }
+    });
+});
